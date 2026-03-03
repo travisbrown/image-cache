@@ -312,8 +312,7 @@ impl Entries<'_> {
                 .collect::<Result<Vec<PathBuf>, std::io::Error>>()
                 .map_err(IterationError::from)?;
 
-            paths.sort();
-            paths.reverse();
+            paths.sort_unstable_by(|first, second| second.cmp(first));
 
             match prefix_part_length {
                 Some(prefix_part_length) => {

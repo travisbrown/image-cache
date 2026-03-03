@@ -64,7 +64,7 @@ impl Key<'_> {
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.url.len() + 4);
+        let mut bytes = Vec::with_capacity(self.url.len() + 5);
 
         // This should always fit, but just in case.
         let timestamp_s = u32::try_from(self.timestamp.timestamp()).unwrap_or(u32::MAX);
