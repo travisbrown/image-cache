@@ -12,6 +12,9 @@ jobs:
       - name: check out repository
         uses: actions/checkout@v2
 
+      - name: install libclang
+        run: apt-get update && apt-get install -y libclang-dev
+
       - name: generate code coverage
         run: |
           cargo +nightly tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
