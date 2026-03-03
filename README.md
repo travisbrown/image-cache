@@ -5,6 +5,8 @@
 
 A simple [Rust][rust] image cache service.
 
+While the code is mostly generic, it is designed for a specific use case (browsing an index of products from e.g. the Apple app store). In general you are probably better off using something like Nginx's [`proxy_cache`][nginx-proxy-cache].
+
 ## Usage
 
 First compile:
@@ -47,5 +49,6 @@ This "static" URL will be used for any future requests for the same source image
 This software is licensed under the [GNU General Public License v3.0][gpl-v3] (GPL-3.0).
 
 [gpl-v3]: https://www.gnu.org/licenses/gpl-3.0.en.html
+[nginx-proxy-cache]: https://docs.nginx.com/nginx/admin-guide/content-cache/content-caching/
 [rust]: https://rust-lang.org/
 [rust-installation]: https://doc.rust-lang.org/cargo/getting-started/installation.html
