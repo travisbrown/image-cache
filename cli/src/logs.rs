@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use image_scraper::image_type::ImageType;
+use image_cache::image_type::ImageType;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DownloadLogEntry {

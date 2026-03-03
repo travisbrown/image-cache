@@ -1,9 +1,9 @@
 use cli_helpers::prelude::*;
-use image_scraper::{
+use image_cache::{
     client::Client,
     store::{PrefixPartLengths, Store},
 };
-use image_scraper_index::{Entry, db::Database};
+use image_cache_index::{Entry, db::Database};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -180,7 +180,7 @@ async fn main() -> Result<(), Error> {
                             "S,{},{},{},{:x}",
                             url,
                             entry.timestamp.timestamp(),
-                            image_scraper::image_type::ImageType::from(entry.image_type),
+                            image_cache::image_type::ImageType::from(entry.image_type),
                             entry.digest
                         );
                     }
@@ -236,15 +236,15 @@ pub enum Error {
     #[error("CSV error")]
     Csv(#[from] csv::Error),
     #[error("Client error")]
-    Client(#[from] image_scraper::client::Error),
+    Client(#[from] image_cache::client::Error),
     #[error("Store error")]
-    Store(#[from] image_scraper::store::Error),
+    Store(#[from] image_cache::store::Error),
     #[error("Store initialization error")]
-    StoreInitialization(#[from] image_scraper::store::InitializationError),
+    StoreInitialization(#[from] image_cache::store::InitializationError),
     #[error("Store iteration error")]
-    StoreIteration(#[from] image_scraper::store::IterationError),
+    StoreIteration(#[from] image_cache::store::IterationError),
     #[error("Index database error")]
-    IndexDatabase(#[from] image_scraper_index::db::Error),
+    IndexDatabase(#[from] image_cache_index::db::Error),
     #[error("Missing prefix part lengths")]
     MissingPrefixPartLengths,
     #[error("Prefix part lengths mismatch")]
@@ -255,7 +255,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Parser)]
-#[clap(name = "image-scraper", version, author)]
+#[clap(name = "image-cache", version, author)]
 struct Opts {
     #[clap(flatten)]
     verbose: Verbosity,

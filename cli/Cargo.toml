@@ -1,5 +1,5 @@
 [package]
-name = "image-scraper-cli"
+name = "image-cache-cli"
 authors = { workspace = true }
 repository = { workspace = true }
 version = { workspace = true }
@@ -10,8 +10,8 @@ license = { workspace = true }
 chrono = { workspace = true }
 cli-helpers = { workspace = true }
 csv = { workspace = true }
-image-scraper = { path = "../core/" }
-image-scraper-index = { path = "../index/" }
+image-cache = { path = "../core/" }
+image-cache-index = { path = "../index/" }
 md5 = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

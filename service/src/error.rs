@@ -50,17 +50,17 @@ pub enum RequestImageError {
     #[error("Must be valid UTF-8: {0:?}")]
     InvalidUtf8(Vec<u8>),
     #[error("Index database error")]
-    Index(#[from] image_scraper_index::db::Error),
+    Index(#[from] image_cache_index::db::Error),
     #[error("Image download previously failed ({1}): {0}")]
     DownloadFailed(String, DateTime<Utc>),
     #[error("Invalid image type: {0}")]
-    InvalidImageType(image_scraper::image_type::ImageType),
+    InvalidImageType(image_cache::image_type::ImageType),
     #[error("Unexpected client status code: {0}")]
     UnexpectedStatus(StatusCode),
     #[error("Download queue error")]
     DownloadQueue(#[from] ChannelError),
-    #[error("HTP client error")]
-    Http(#[from] image_scraper::client::Error),
+    #[error("HTTP client error")]
+    Http(#[from] image_cache::client::Error),
 }
 
 impl IntoResponse for RequestImageError {
@@ -102,7 +102,7 @@ impl IntoResponse for RequestImageError {
 #[derive(thiserror::Error, Debug)]
 pub enum MapUrlsError {
     #[error("Index database error")]
-    Index(#[from] image_scraper_index::db::Error),
+    Index(#[from] image_cache_index::db::Error),
 }
 
 impl IntoResponse for MapUrlsError {

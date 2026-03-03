@@ -12,9 +12,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use clap::Parser;
-use image_scraper::image_type::ImageType;
-use image_scraper::store::{PrefixPartLengths, Store};
-use image_scraper_index::Entry;
+use image_cache::image_type::ImageType;
+use image_cache::store::{PrefixPartLengths, Store};
+use image_cache_index::Entry;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio_util::io::ReaderStream;
@@ -95,7 +95,7 @@ async fn static_image(
         let image_mime_type = parts[1]
             .parse::<ImageType>()
             .ok()
-            .and_then(image_scraper::image_type::ImageType::mime_type)
+            .and_then(image_cache::image_type::ImageType::mime_type)
             .ok_or_else(|| error::StaticImageError::InvalidExtension(parts[1].to_string()))?;
 
         let path = manager
@@ -132,13 +132,11 @@ async fn request_image(
         .lookup_status(url)
         .map_err(error::RequestImageError::from)?
     {
-        manager::ImageStatus::Downloaded { entry } => Ok(Redirect::permanent(
-            &manager.static_url(
-                entry.digest,
-                entry.image_type.into(),
-                manager::UrlStyle::Absolute,
-            ),
-        )
+        manager::ImageStatus::Downloaded { entry } => Ok(Redirect::permanent(&manager.static_url(
+            entry.digest,
+            entry.image_type.into(),
+            manager::UrlStyle::Absolute,
+        ))
         .into_response()),
         manager::ImageStatus::Downloading => {
             let (bytes, action) = manager
@@ -209,13 +207,13 @@ pub enum Error {
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("Store initialization error")]
-    StoreInitialization(#[from] image_scraper::store::InitializationError),
+    StoreInitialization(#[from] image_cache::store::InitializationError),
     #[error("Index error")]
-    IndexI(#[from] image_scraper_index::db::Error),
+    IndexI(#[from] image_cache_index::db::Error),
 }
 
 #[derive(Debug, Parser)]
-#[clap(name = "image-scraper-service", version, author)]
+#[clap(name = "image-cache-service", version, author)]
 struct Opts {
     #[command(flatten)]
     verbosity: clap_verbosity_flag::Verbosity,

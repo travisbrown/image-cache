@@ -1,5 +1,5 @@
 [package]
-name = "image-scraper-service"
+name = "image-cache-service"
 authors = { workspace = true }
 repository = { workspace = true }
 version = { workspace = true }
@@ -16,8 +16,8 @@ clap-verbosity-flag = { version = "3", features = ["tracing"] }
 futures = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
-image-scraper = { path = "../core/" }
-image-scraper-index = { path = "../index/" }
+image-cache = { path = "../core/" }
+image-cache-index = { path = "../index/" }
 imghdr = { workspace = true }
 log = { workspace = true }
 md5 = { workspace = true }

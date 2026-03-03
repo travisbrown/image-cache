@@ -1,7 +1,7 @@
 # Image cache
 
-[![Rust build status](https://img.shields.io/github/actions/workflow/status/travisbrown/image-scraper/ci.yaml?branch=main)](https://github.com/travisbrown/image-scraper/actions)
-[![Coverage status](https://img.shields.io/codecov/c/github/travisbrown/image-scraper/main.svg)](https://codecov.io/github/travisbrown/image-scraper)
+[![Rust build status](https://img.shields.io/github/actions/workflow/status/travisbrown/image-cache/ci.yaml?branch=main)](https://github.com/travisbrown/image-cache/actions)
+[![Coverage status](https://img.shields.io/codecov/c/github/travisbrown/image-cache/main.svg)](https://codecov.io/github/travisbrown/image-cache)
 
 A simple [Rust][rust] image cache service.
 
@@ -16,7 +16,7 @@ $ cargo build --release
 Then start the service, pointing to one directory for the image file data, and another for the index (if these directories do not exist, they will be created):
 
 ```bash
-$ target/release/image-scraper-service serve -vvvv --store tmp/store/ --prefix 2/2 --index tmp/index/
+$ target/release/image-cache-service serve -vvvv --store tmp/store/ --prefix 2/2 --index tmp/index/
 ```
 
 Next you can request a list of image URLs to be rewritten as local URLs:

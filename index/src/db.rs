@@ -1,6 +1,6 @@
 use crate::Entry;
 use chrono::{DateTime, Utc};
-use image_scraper::image_type::ImageType;
+use image_cache::image_type::ImageType;
 use rocksdb::{DB, IteratorMode, Options};
 use std::borrow::Cow;
 use std::path::Path;

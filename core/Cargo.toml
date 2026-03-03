@@ -1,5 +1,5 @@
 [package]
-name = "image-scraper"
+name = "image-cache"
 authors = { workspace = true }
 repository = { workspace = true }
 version = { workspace = true }

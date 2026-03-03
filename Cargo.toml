@@ -4,8 +4,8 @@ members = ["core", "cli", "index", "service"]
 
 [workspace.package]
 authors = ["Travis Brown <travisrobertbrown@gmail.com>"]
-homepage = "https://github.com/travisbrown/image-scraper"
-repository = "https://github.com/travisbrown/image-scraper"
+homepage = "https://github.com/travisbrown/image-cache"
+repository = "https://github.com/travisbrown/image-cache"
 keywords = ["scraping"]
 edition = "2024"
 license = "GPL-3.0-only"

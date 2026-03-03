@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use futures::future::TryFutureExt;
-use image_scraper::{client::Client, image_type::ImageType, store::Store};
-use image_scraper_index::{Entry, db::Database};
+use image_cache::{client::Client, image_type::ImageType, store::Store};
+use image_cache_index::{Entry, db::Database};
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
@@ -17,8 +17,8 @@ use tokio::{
 };
 
 pub type ClientResult = Result<
-    Result<(bytes::Bytes, image_scraper::store::Action), http::StatusCode>,
-    image_scraper::client::Error,
+    Result<(bytes::Bytes, image_cache::store::Action), http::StatusCode>,
+    image_cache::client::Error,
 >;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,7 +69,7 @@ impl Manager {
         index: I,
         request_buffer_size: usize,
         delay: Duration,
-    ) -> Result<Self, image_scraper_index::db::Error> {
+    ) -> Result<Self, image_cache_index::db::Error> {
         let client = Arc::new(Client::new(store.clone()));
         let index = Database::open(index)?;
 
@@ -114,7 +114,7 @@ impl Manager {
     pub fn lookup_status(
         &self,
         image_url: &str,
-    ) -> Result<ImageStatus, image_scraper_index::db::Error> {
+    ) -> Result<ImageStatus, image_cache_index::db::Error> {
         let results = self.index.lookup(image_url)?;
 
         if results.is_empty() {
