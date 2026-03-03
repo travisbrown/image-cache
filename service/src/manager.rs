@@ -128,7 +128,7 @@ impl Manager {
                     let timestamp = results
                         .iter()
                         .find_map(|result| result.err())
-                        .unwrap_or_default();
+                        .expect("Expected at least one error (should never happen)");
 
                     Ok(ImageStatus::Failed { timestamp })
                 },
