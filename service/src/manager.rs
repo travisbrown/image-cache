@@ -90,9 +90,8 @@ impl Manager {
 
     pub async fn close(&self) -> Result<(), super::error::ShutdownError> {
         self.request_sender.send(None).await?;
-        let mut handle = self.request_receiver_handle.lock().await;
-
-        if let Some(handle) = handle.take() {
+        let handle = self.request_receiver_handle.lock().await.take();
+        if let Some(handle) = handle {
             handle.await?;
         }
 

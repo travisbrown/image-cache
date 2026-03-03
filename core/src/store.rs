@@ -96,6 +96,7 @@ impl Store {
     pub fn new<P: AsRef<Path>>(base: P) -> Self {
         let base = base.as_ref().to_path_buf();
 
+        #[allow(clippy::missing_panics_doc)]
         // An unconstrained `Hex<16>` tree always builds successfully.
         let tree = Tree::builder(&base)
             .with_scheme(SCHEME)
@@ -151,6 +152,7 @@ impl Store {
     #[must_use]
     pub fn path(&self, digest: Digest) -> PathBuf {
         // A 16-byte array is always a valid `Hex<16>` name, so this never fails.
+        #[allow(clippy::missing_panics_doc)]
         self.tree
             .path(digest.0)
             .expect("Hex<16> path construction from [u8; 16] is infallible")
