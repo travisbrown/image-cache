@@ -41,7 +41,7 @@ async fn main() -> Result<(), Error> {
                     Ok(Ok((_, action))) => {
                         writer.write_record([
                             if action.added { "A" } else { "F" },
-                            &format!("{:x?}", action.entry.digest),
+                            &format!("{:x}", action.digest()),
                             &action.image_type.to_string(),
                             &line,
                         ])?;
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Error> {
                     println!("{}", entry.path.as_os_str().to_string_lossy());
                 }
             } else {
-                for entry in store.entries().validate_fail_fast() {
+                for entry in store.validate_entries_fail_fast() {
                     let entry = entry?;
 
                     println!("{}", entry.path.as_os_str().to_string_lossy());
@@ -217,7 +217,7 @@ async fn main() -> Result<(), Error> {
             for entry in store.entries() {
                 let entry = entry?;
 
-                if !digests.contains(&entry.digest.0) {
+                if !digests.contains(&entry.name) {
                     println!("{}", entry.path.as_os_str().to_string_lossy());
                 }
             }
@@ -237,12 +237,14 @@ pub enum Error {
     Csv(#[from] csv::Error),
     #[error("Client error")]
     Client(#[from] image_cache::client::Error),
-    #[error("Store error")]
-    Store(#[from] image_cache::store::Error),
     #[error("Store initialization error")]
     StoreInitialization(#[from] image_cache::store::InitializationError),
+    #[error("Store error")]
+    Store(#[from] prefix_file_tree::Error),
     #[error("Store iteration error")]
-    StoreIteration(#[from] image_cache::store::IterationError),
+    StoreIteration(#[from] prefix_file_tree::iter::Error),
+    #[error("Store validation error")]
+    StoreValidation(#[from] image_cache::store::ValidationError),
     #[error("Index database error")]
     IndexDatabase(#[from] image_cache_index::db::Error),
     #[error("Missing prefix part lengths")]

@@ -24,6 +24,7 @@ imghdr = "0.7"
 log = "0.4"
 md5 = "0.8"
 mime = "0.3"
+prefix-file-tree = "0.4"
 reqwest = "0.13"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"

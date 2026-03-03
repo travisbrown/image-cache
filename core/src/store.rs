@@ -1,24 +1,17 @@
 use crate::image_type::ImageType;
-use hex::FromHex;
 use imghdr::Type;
 use md5::Digest;
-use std::fs::File;
-use std::io::Write;
+use prefix_file_tree::{
+    Entry, Tree,
+    scheme::{Case, Identity, hex::Hex},
+};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("I/O error")]
-    Io(#[from] std::io::Error),
-    #[error("Invalid file name")]
-    InvalidFileName(PathBuf),
-    #[error("Expected directory")]
-    ExpectedDirectory(PathBuf),
-    #[error("Unexpected digest")]
-    UnexpectedDigest { expected: Digest, actual: Digest },
-    #[error("Iteration error")]
-    Iteration(#[from] IterationError),
-}
+/// Alias for the concrete tree type: lowercase MD5 hex names, no file extension.
+type HexTree = Tree<Hex<16>>;
+
+/// The scheme instance shared by all `Store` constructors.
+const SCHEME: Hex<16> = Hex { case: Case::Lower };
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitializationError {
@@ -27,38 +20,14 @@ pub enum InitializationError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum IterationError {
-    #[error("I/O error")]
-    Io(#[from] std::io::Error),
-    #[error("Invalid file name")]
-    InvalidFileName(PathBuf),
-    #[error("Expected directory")]
-    ExpectedDirectory(PathBuf),
-    #[error("Expected file")]
-    ExpectedFile(PathBuf),
-    #[error("Hex parse error")]
-    Hex(#[from] hex::FromHexError),
+pub enum ValidationError {
+    #[error(transparent)]
+    Iteration(#[from] prefix_file_tree::iter::Error),
+    #[error("Unexpected digest")]
+    UnexpectedDigest { expected: Digest, actual: Digest },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Entry {
-    pub path: PathBuf,
-    pub digest: Digest,
-}
-
-impl Entry {
-    pub fn validate(&self) -> Result<Result<(), Digest>, std::io::Error> {
-        let bytes = std::fs::read(&self.path)?;
-        let digest = md5::compute(&bytes);
-
-        if digest == self.digest {
-            Ok(Ok(()))
-        } else {
-            Ok(Err(digest))
-        }
-    }
-}
-
+/// Parsed form of the `--prefix` CLI argument (e.g. `"2/2"` is parsed as `[2, 2]`).
 #[derive(Clone, Debug)]
 pub struct PrefixPartLengths(pub Vec<usize>);
 
@@ -76,16 +45,20 @@ impl std::str::FromStr for PrefixPartLengths {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ValidationResult {
-    Valid { entry: Entry },
-    Invalid { entry: Entry, actual: Digest },
+    Valid {
+        entry: Entry<[u8; 16]>,
+    },
+    Invalid {
+        entry: Entry<[u8; 16]>,
+        actual: Digest,
+    },
 }
-
 impl ValidationResult {
-    pub fn result(self) -> Result<Entry, Error> {
+    pub fn result(self) -> Result<Entry<[u8; 16]>, ValidationError> {
         match self {
             Self::Valid { entry } => Ok(entry),
-            Self::Invalid { entry, actual } => Err(Error::UnexpectedDigest {
-                expected: entry.digest,
+            Self::Invalid { entry, actual } => Err(ValidationError::UnexpectedDigest {
+                expected: Digest(entry.name),
                 actual,
             }),
         }
@@ -94,12 +67,18 @@ impl ValidationResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Action {
-    pub entry: Entry,
+    pub entry: Entry<[u8; 16]>,
     pub image_type: ImageType,
     pub added: bool,
 }
 
 impl Action {
+    /// Return the MD5 digest of the stored content.
+    #[must_use]
+    pub const fn digest(&self) -> Digest {
+        Digest(self.entry.name)
+    }
+
     #[must_use]
     pub const fn image_type(&self) -> Option<Type> {
         self.image_type.value()
@@ -108,291 +87,161 @@ impl Action {
 
 #[derive(Clone)]
 pub struct Store {
-    pub base: PathBuf,
-    pub prefix_part_lengths: Vec<usize>,
+    base: PathBuf,
+    tree: HexTree,
 }
 
 impl Store {
+    /// Create a store rooted at `base` with no directory prefix.
     pub fn new<P: AsRef<Path>>(base: P) -> Self {
-        Self {
-            base: base.as_ref().to_path_buf(),
-            prefix_part_lengths: vec![],
-        }
+        let base = base.as_ref().to_path_buf();
+
+        // An unconstrained `Hex<16>` tree always builds successfully.
+        let tree = Tree::builder(&base)
+            .with_scheme(SCHEME)
+            .with_no_extension()
+            .build()
+            .expect("Tree builder failed (should never happen)");
+
+        Self { base, tree }
     }
 
+    /// Configure the prefix lengths (e.g. `[2, 2]` → `ab/cd/<digest>`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InitializationError::InvalidPrefixPartLengths`] if the lengths
+    /// sum to more than 32 (the full MD5 hex width) or if any length is zero.
     pub fn with_prefix_part_lengths<T: AsRef<[usize]>>(
         self,
         prefix_part_lengths: T,
     ) -> Result<Self, InitializationError> {
-        if prefix_part_lengths.as_ref().iter().copied().sum::<usize>() > 32
-            || prefix_part_lengths.as_ref().contains(&0)
-        {
-            Err(InitializationError::InvalidPrefixPartLengths(
-                prefix_part_lengths.as_ref().to_vec(),
-            ))
-        } else {
-            Ok(Self {
-                base: self.base,
-                prefix_part_lengths: prefix_part_lengths.as_ref().to_vec(),
-            })
-        }
-    }
+        let lengths = prefix_part_lengths.as_ref();
 
-    /// Infer the prefix part lengths used to create a store.
-    ///
-    /// The result will be empty if and only if the store has no files (even if there are directories).
-    ///
-    /// If this function returns a result, it is guaranteed to be correct if the store is valid, but the validity is not checked.
-    pub fn infer_prefix_part_lengths<P: AsRef<Path>>(base: P) -> Result<Option<Vec<usize>>, Error> {
-        if base.as_ref().is_dir() {
-            let first = std::fs::read_dir(base)?
-                .next()
-                .map_or(Ok(None), |entry| entry.map(|entry| Some(entry.path())))?;
-
-            let mut acc = vec![];
-
-            let is_empty = first
-                .map(|first| Self::infer_prefix_part_lengths_rec(&first, &mut acc))
-                .map_or(Ok(true), |value| value)?;
-
-            Ok(if is_empty { None } else { Some(acc) })
-        } else {
-            Err(Error::ExpectedDirectory(base.as_ref().to_path_buf()))
-        }
-    }
-
-    // Return value indicates whether the store has no files.
-    fn infer_prefix_part_lengths_rec<P: AsRef<Path>>(
-        current: P,
-        acc: &mut Vec<usize>,
-    ) -> Result<bool, Error> {
-        if current.as_ref().is_file() {
-            Ok(false)
-        } else {
-            let file_name = current
-                .as_ref()
-                .file_name()
-                .ok_or_else(|| Error::InvalidFileName(current.as_ref().to_path_buf()))?;
-
-            acc.push(file_name.len());
-
-            let next = std::fs::read_dir(current)?
-                .next()
-                .map_or(Ok(None), |entry| entry.map(|entry| Some(entry.path())))?;
-
-            next.map_or(Ok(true), |next| {
-                Self::infer_prefix_part_lengths_rec(next, acc)
-            })
-        }
-    }
-
-    #[must_use]
-    pub fn entries(&self) -> Entries<'_> {
-        Entries {
-            stack: vec![vec![self.base.clone()]],
-            level: None,
-            prefix_part_lengths: &self.prefix_part_lengths,
-        }
-    }
-
-    pub fn save<T: AsRef<[u8]> + Copy>(&self, bytes: T) -> Result<Action, Error> {
-        // The image type check will fail with an error if there aren't enough bytes.
-        let image_type = if bytes.as_ref().len() < 8 {
-            None
-        } else {
-            imghdr::from_bytes(bytes.as_ref())
-        };
-
-        let digest = md5::compute(bytes);
-        let path = self.path(digest);
-
-        // We construct the path, so we know there will always be a parent.
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if lengths.iter().copied().sum::<usize>() > 32 || lengths.contains(&0) {
+            return Err(InitializationError::InvalidPrefixPartLengths(
+                lengths.to_vec(),
+            ));
         }
 
-        let added = if path.exists() {
-            false
-        } else {
-            let mut file = File::create(&path)?;
-            file.write_all(bytes.as_ref())?;
+        let tree = Tree::builder(&self.base)
+            .with_scheme(SCHEME)
+            .with_no_extension()
+            .with_prefix_part_lengths(lengths)
+            .build()
+            .map_err(|_| InitializationError::InvalidPrefixPartLengths(lengths.to_vec()))?;
 
-            true
-        };
-
-        Ok(Action {
-            entry: Entry { path, digest },
-            image_type: ImageType::new(image_type),
-            added,
+        Ok(Self {
+            base: self.base,
+            tree,
         })
     }
 
+    /// Infer the prefix part lengths that were used to create an existing store.
+    ///
+    /// Returns `None` if the store contains no files. The result is guaranteed
+    /// to be correct when the store is valid, but validity is not verified.
+    pub fn infer_prefix_part_lengths<P: AsRef<Path>>(
+        base: P,
+    ) -> Result<Option<Vec<usize>>, prefix_file_tree::Error> {
+        Tree::<Identity>::infer_prefix_part_lengths(base)
+    }
+
+    /// Compute the storage path for `digest` without performing any I/O.
     #[must_use]
     pub fn path(&self, digest: Digest) -> PathBuf {
-        let digest_string = format!("{digest:x}");
-        let mut digest_remaining = digest_string.as_str();
-        let mut path = self.base.clone();
-
-        for prefix_part_length in &self.prefix_part_lengths {
-            let next = &digest_remaining[0..*prefix_part_length];
-            digest_remaining = &digest_remaining[*prefix_part_length..];
-
-            path.push(next);
-        }
-
-        path.push(digest_string);
-
-        path
-    }
-}
-
-pub struct Entries<'a> {
-    stack: Vec<Vec<PathBuf>>,
-    level: Option<usize>,
-    prefix_part_lengths: &'a [usize],
-}
-
-impl Entries<'_> {
-    fn is_last(&self) -> bool {
-        self.level == Some(self.prefix_part_lengths.len())
+        // A 16-byte array is always a valid `Hex<16>` name, so this never fails.
+        self.tree
+            .path(digest.0)
+            .expect("Hex<16> path construction from [u8; 16] is infallible")
     }
 
-    fn current_prefix_part_length(&self) -> Option<usize> {
-        self.level
-            .and_then(|level| self.prefix_part_lengths.get(level))
-            .copied()
+    /// Return an iterator over every entry in the store.
+    #[must_use]
+    pub fn entries(&self) -> prefix_file_tree::iter::Entries<'_, Hex<16>> {
+        self.tree.entries()
     }
 
-    fn increment_level(&mut self) {
-        self.level = Some(self.level.take().map_or(0, |level| level + 1));
-    }
+    /// Verify the stored file's MD5 digest matches the recorded one.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Ok(()))` — digest matches.
+    /// - `Ok(Err(actual))` — digest mismatch; `actual` is what was computed.
+    /// - `Err(e)` — I/O error reading the file.
+    fn validate(entry: &Entry<[u8; 16]>) -> Result<Result<(), Digest>, std::io::Error> {
+        let bytes = std::fs::read(&entry.path)?;
+        let digest = md5::compute(&bytes);
 
-    const fn decrement_level(&mut self) {
-        if let Some(level) = self.level.take()
-            && level != 0
-        {
-            self.level = Some(level - 1);
-        }
-    }
-
-    const fn is_valid_char(byte: u8) -> bool {
-        byte.is_ascii_lowercase() || byte.is_ascii_digit()
-    }
-
-    fn path_to_entry(path: PathBuf) -> Result<Entry, IterationError> {
-        if path.is_file() {
-            path.file_name()
-                .ok_or_else(|| IterationError::InvalidFileName(path.clone()))
-                .and_then(|file_name| {
-                    let file_name_bytes = file_name.as_encoded_bytes();
-
-                    if file_name_bytes
-                        .iter()
-                        .all(|byte| Self::is_valid_char(*byte))
-                    {
-                        <[u8; 16]>::from_hex(file_name_bytes).map_err(IterationError::from)
-                    } else {
-                        Err(IterationError::InvalidFileName(path.clone()))
-                    }
-                })
-                .map(Digest)
-                .map(|digest| Entry { path, digest })
+        if digest.0 == entry.name {
+            Ok(Ok(()))
         } else {
-            Err(IterationError::ExpectedFile(path))
+            Ok(Err(digest))
         }
     }
 
-    fn path_to_paths(
-        path: PathBuf,
-        prefix_part_length: Option<usize>,
-    ) -> Result<Vec<PathBuf>, IterationError> {
-        if path.is_dir() {
-            let mut paths = std::fs::read_dir(path)?
-                .map(|entry| entry.map(|entry| entry.path()))
-                .collect::<Result<Vec<PathBuf>, std::io::Error>>()
-                .map_err(IterationError::from)?;
-
-            paths.sort_unstable_by(|first, second| second.cmp(first));
-
-            match prefix_part_length {
-                Some(prefix_part_length) => {
-                    let invalid_path = paths.iter().find(|path| {
-                        path.file_name().is_none_or(|file_name| {
-                            file_name.len() != prefix_part_length
-                                && file_name
-                                    .as_encoded_bytes()
-                                    .iter()
-                                    .any(|byte| !Self::is_valid_char(*byte))
-                        })
-                    });
-
-                    // Clippy is wrong here.
-                    #[allow(clippy::option_if_let_else)]
-                    match invalid_path {
-                        Some(invalid_path) => {
-                            Err(IterationError::InvalidFileName(invalid_path.clone()))
-                        }
-                        None => Ok(paths),
-                    }
-                }
-                None => Ok(paths),
-            }
-        } else {
-            Err(IterationError::ExpectedDirectory(path))
-        }
-    }
-
-    pub fn validate(self) -> impl Iterator<Item = Result<ValidationResult, IterationError>> {
-        self.map(|entry| {
+    /// Validate each entry by re-computing its MD5 digest.
+    pub fn validate_entries(
+        &self,
+    ) -> impl Iterator<Item = Result<ValidationResult, prefix_file_tree::iter::Error>> {
+        self.entries().map(|entry| {
             let entry = entry?;
 
-            Ok(match entry.validate()? {
+            Ok(match Self::validate(&entry)? {
                 Ok(()) => ValidationResult::Valid { entry },
                 Err(actual) => ValidationResult::Invalid { entry, actual },
             })
         })
     }
 
-    pub fn validate_fail_fast(self) -> impl Iterator<Item = Result<Entry, Error>> {
-        self.validate().map(|result| {
+    /// Like [`validate_entries`](Self::validate), but stops on the first invalid or corrupt entry.
+    pub fn validate_entries_fail_fast(
+        &self,
+    ) -> impl Iterator<Item = Result<Entry<[u8; 16]>, ValidationError>> {
+        self.validate_entries().map(|result| {
             result
-                .map_err(Error::from)
+                .map_err(ValidationError::from)
                 .and_then(ValidationResult::result)
         })
     }
-}
 
-impl Iterator for Entries<'_> {
-    type Item = Result<Entry, IterationError>;
+    /// Write `bytes` to the store and return an [`Action`] describing the outcome.
+    ///
+    /// If an identical digest already exists, the file is not re-written and
+    /// `Action::added` is `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an I/O operation fails.
+    pub fn save<T: AsRef<[u8]>>(&self, bytes: T) -> Result<Action, prefix_file_tree::Error> {
+        let bytes = bytes.as_ref();
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.stack.pop().and_then(|mut next_paths| {
-            if self.is_last() {
-                if let Some(next_path) = next_paths.pop() {
-                    self.stack.push(next_paths);
+        // Image type detection requires at least 8 bytes for the magic number.
+        let image_type = if bytes.len() < 8 {
+            None
+        } else {
+            imghdr::from_bytes(bytes)
+        };
 
-                    Some(Self::path_to_entry(next_path))
-                } else {
-                    self.decrement_level();
+        let digest = md5::compute(bytes);
+        let path = self.path(digest);
 
-                    self.next()
-                }
-            } else if let Some(next_path) = next_paths.pop() {
-                Self::path_to_paths(next_path, self.current_prefix_part_length()).map_or_else(
-                    |error| Some(Err(error)),
-                    |next_level| {
-                        self.stack.push(next_paths);
-                        self.stack.push(next_level);
-                        self.increment_level();
-
-                        self.next()
-                    },
-                )
-            } else {
-                self.decrement_level();
-
-                self.next()
+        let added = match self.tree.create_file(digest.0)? {
+            Some(mut file) => {
+                use std::io::Write as _;
+                file.write_all(bytes).map_err(prefix_file_tree::Error::Io)?;
+                true
             }
+            None => false,
+        };
+
+        Ok(Action {
+            entry: Entry {
+                path,
+                name: digest.0,
+            },
+            image_type: ImageType::new(image_type),
+            added,
         })
     }
 }
@@ -438,7 +287,7 @@ mod tests {
 
     fn test_save(
         prefix_part_lengths: Vec<usize>,
-    ) -> Result<Vec<super::Entry>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<prefix_file_tree::Entry<[u8; 16]>>, Box<dyn std::error::Error>> {
         let base = tempfile::tempdir()?;
 
         let store = super::Store::new(base.path().to_path_buf())
@@ -473,10 +322,7 @@ mod tests {
         assert_eq!(inferred_prefix_parts_length, Some(prefix_part_lengths));
 
         let entries = store.entries().collect::<Result<Vec<_>, _>>()?;
-        let digests = entries
-            .iter()
-            .map(|entry| entry.digest.0)
-            .collect::<Vec<_>>();
+        let digests = entries.iter().map(|entry| entry.name).collect::<Vec<_>>();
 
         let expected_digests = vec![
             minimal_jpg_digest(),

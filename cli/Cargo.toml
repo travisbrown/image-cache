@@ -13,6 +13,7 @@ csv = { workspace = true }
 image-cache = { path = "../core/" }
 image-cache-index = { path = "../index/" }
 md5 = { workspace = true }
+prefix-file-tree = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde-hex = "0.1"

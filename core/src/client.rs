@@ -5,7 +5,7 @@ pub enum Error {
     #[error("HTTP client error")]
     Http(#[from] reqwest::Error),
     #[error("Store error")]
-    Store(#[from] crate::store::Error),
+    Store(#[from] prefix_file_tree::Error),
 }
 
 #[derive(Clone)]

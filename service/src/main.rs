@@ -156,7 +156,7 @@ async fn request_image(
                             url,
                             Entry {
                                 timestamp: Utc::now(),
-                                digest: action.entry.digest,
+                                digest: action.digest(),
                                 image_type,
                             },
                         )

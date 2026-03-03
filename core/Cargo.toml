@@ -14,6 +14,7 @@ http = { workspace = true }
 imghdr = { workspace = true }
 md5 = { workspace = true }
 mime = { workspace = true }
+prefix-file-tree = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
