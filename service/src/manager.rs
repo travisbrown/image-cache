@@ -2,11 +2,8 @@ use chrono::{DateTime, Utc};
 use image_cache::{client::Client, image_type::ImageType, store::Store};
 use image_cache_index::{Entry, db::Database};
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::{
     sync::{
         Mutex,
@@ -48,25 +45,79 @@ pub enum UrlStyle {
     Relative,
 }
 
-/// A running per-domain download worker: the send end of its queue and its task handle.
+/// A running per-domain download worker: owns its own HTTP client and applies
+/// the configured inter-request delay only when back-to-back requests arrive.
 struct DomainWorker {
-    sender: Sender<Option<(String, oneshot::Sender<ClientResult>)>>,
+    sender: Sender<(String, oneshot::Sender<ClientResult>)>,
     handle: JoinHandle<()>,
+}
+
+impl DomainWorker {
+    /// Spawns a new worker task and returns a handle to its queue.
+    fn spawn(client: Client, delay: Duration, buffer_size: usize) -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::channel(buffer_size);
+        let handle = tokio::task::spawn(Self::run(client, delay, receiver));
+        Self { sender, handle }
+    }
+
+    /// Processes download requests sequentially, rate-limiting only when
+    /// another request is already queued (i.e. back-to-back within this domain).
+    /// The task exits cleanly when all senders are dropped.
+    async fn run(
+        client: Client,
+        delay: Duration,
+        mut receiver: Receiver<(String, oneshot::Sender<ClientResult>)>,
+    ) {
+        // Holds a request peeked non-blocking after the previous download so
+        // we can decide whether to sleep before processing it.
+        let mut prefetched: Option<(String, oneshot::Sender<ClientResult>)> = None;
+
+        loop {
+            // Use the already-dequeued item if present; otherwise block for one.
+            let (url, reply) = match prefetched.take() {
+                Some(item) => item,
+                None => match receiver.recv().await {
+                    Some(item) => item,
+                    None => break, // all senders dropped → clean shutdown
+                },
+            };
+
+            log::info!("Downloading image: {url}");
+            let result = client.download(&url).await;
+
+            if reply.send(result).is_err() {
+                log::warn!("Image already downloaded (may need to re-index image store): {url}");
+            }
+
+            // Non-blocking peek: sleep only when another request is already
+            // queued. If the domain queue is idle the next recv() blocks with
+            // no artificial delay.
+            match receiver.try_recv() {
+                Ok(item) => {
+                    prefetched = Some(item);
+                    log::info!("Waiting until next download: {delay:?}");
+                    tokio::time::sleep(delay).await;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+    }
 }
 
 pub struct Manager {
     url_config: UrlConfig,
     pub index: Database,
     store: Store,
-    /// Shared HTTP client, cloned into each per-domain worker task.
-    client: Arc<Client>,
-    /// Inter-request delay applied per domain (not globally).
+    /// Template client cloned into each new per-domain worker.
+    client: Client,
+    /// Inter-request delay applied per domain queue.
     delay: Duration,
-    /// Channel buffer size reused when spawning new domain workers.
+    /// Channel buffer size used when spawning new domain workers.
     request_buffer_size: usize,
-    /// Per-domain download queues, keyed by host (e.g. `"example.com"`).
+    /// Per-domain download workers, keyed by host (e.g. `"example.com"`).
     /// Workers are spawned lazily on the first request for each host.
-    domain_workers: Arc<Mutex<HashMap<String, DomainWorker>>>,
+    domain_workers: Mutex<HashMap<String, DomainWorker>>,
 }
 
 pub enum ImageStatus {
@@ -83,7 +134,7 @@ impl Manager {
         request_buffer_size: usize,
         delay: Duration,
     ) -> Result<Self, image_cache_index::db::Error> {
-        let client = Arc::new(Client::new(store.clone()));
+        let client = Client::new(store.clone());
         let index = Database::open(index)?;
 
         Ok(Self {
@@ -93,25 +144,26 @@ impl Manager {
             client,
             delay,
             request_buffer_size,
-            domain_workers: Arc::new(Mutex::new(HashMap::new())),
+            domain_workers: Mutex::new(HashMap::new()),
         })
     }
 
     pub async fn close(&self) -> Result<(), super::error::ShutdownError> {
-        // Drain the map so all workers are owned here.
         let workers = std::mem::take(&mut *self.domain_workers.lock().await);
 
         for (_, worker) in workers {
-            worker.sender.send(None).await?;
+            // Dropping the sender closes the channel, which causes the worker
+            // task to exit its recv() loop cleanly.
+            drop(worker.sender);
             worker.handle.await?;
         }
 
         Ok(())
     }
 
-    // The MutexGuard `workers` is already dropped at the earliest possible point
-    // (immediately after `worker.sender.clone()`), so clippy's suggestion to
-    // tighten the drop scope further is a false positive here.
+    // The MutexGuard `workers` is dropped at the end of the inner block, before
+    // the potentially-slow channel send. Clippy still considers the drop scope
+    // improvable even though it is already at the earliest possible point.
     #[allow(clippy::significant_drop_tightening)]
     pub async fn request(
         &self,
@@ -120,21 +172,23 @@ impl Manager {
         let domain = Self::domain_of(image_url);
         let (tx, rx) = oneshot::channel();
 
-        // Hold the lock only long enough to look up or create the per-domain sender,
-        // then release it before the potentially-blocking channel send.
         let sender = {
             let mut workers = self.domain_workers.lock().await;
-            let worker = workers.entry(domain.clone()).or_insert_with(|| {
-                log::info!("Creating worker for {domain}");
-
-                let (sender, receiver) = tokio::sync::mpsc::channel(self.request_buffer_size);
-                let handle = Self::handle_requests(Arc::clone(&self.client), self.delay, receiver);
-                DomainWorker { sender, handle }
-            });
-            worker.sender.clone()
+            workers
+                .entry(domain.clone())
+                .or_insert_with(|| {
+                    log::info!("Creating worker for {domain}");
+                    DomainWorker::spawn(
+                        self.client.clone(),
+                        self.delay,
+                        self.request_buffer_size,
+                    )
+                })
+                .sender
+                .clone()
         };
 
-        sender.send(Some((image_url.to_string(), tx))).await?;
+        sender.send((image_url.to_string(), tx)).await?;
         rx.await.map_err(super::error::ChannelError::from)
     }
 
@@ -233,58 +287,5 @@ impl Manager {
         }
 
         format!("{prefix}request/{encoded_url}")
-    }
-
-    fn handle_requests(
-        client: Arc<Client>,
-        delay: Duration,
-        mut receiver: Receiver<Option<(String, oneshot::Sender<ClientResult>)>>,
-    ) -> JoinHandle<()> {
-        tokio::task::spawn(async move {
-            // Holds a request that was dequeued non-blocking at the end of the
-            // previous iteration (used to decide whether to sleep).
-            let mut prefetched: Option<(String, oneshot::Sender<ClientResult>)> = None;
-
-            loop {
-                // Use the prefetched item if available; otherwise block until one arrives.
-                let (url, sender) = match prefetched.take() {
-                    Some(item) => item,
-                    // None payload = shutdown signal; channel closed = same.
-                    None => if let Some(Some(item)) = receiver.recv().await { item } else {
-                        receiver.close();
-                        break;
-                    },
-                };
-
-                log::info!("Downloading image: {url}");
-                let result = client.download(&url).await;
-
-                match sender.send(result) {
-                    Ok(()) => {}
-                    Err(_result) => {
-                        log::warn!(
-                            "Image already downloaded (may need to re-index image store): {url})"
-                        );
-                    }
-                }
-
-                // Non-blocking peek: only sleep when the next request for this
-                // domain is already queued (back-to-back). When the queue is idle
-                // the next recv() will block immediately with no added delay.
-                match receiver.try_recv() {
-                    Ok(Some(item)) => {
-                        prefetched = Some(item);
-                        log::info!("Waiting until next download: {delay:?}");
-                        tokio::time::sleep(delay).await;
-                    }
-                    Ok(None) | Err(TryRecvError::Disconnected) => {
-                        receiver.close();
-                        break;
-                    }
-                    // Queue is empty; loop back to recv() with no sleep.
-                    Err(TryRecvError::Empty) => {}
-                }
-            }
-        })
     }
 }
