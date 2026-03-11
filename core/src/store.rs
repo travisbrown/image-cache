@@ -209,8 +209,8 @@ impl Store {
 
     /// Write `bytes` to the store and return an [`Action`] describing the outcome.
     ///
-    /// If an identical digest already exists, the file is not re-written and
-    /// `Action::added` is `false`.
+    /// If an identical digest already exists, the file is not re-written and `Action::added` is
+    /// `false`.
     ///
     /// # Errors
     ///

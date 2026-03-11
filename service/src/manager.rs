@@ -45,8 +45,8 @@ pub enum UrlStyle {
     Relative,
 }
 
-/// A running per-host download worker: owns its own HTTP client and applies
-/// the configured delay after every request.
+/// A running per-host download worker: owns its own HTTP client and applies the configured delay
+/// after every request.
 struct HostWorker {
     sender: Sender<(String, oneshot::Sender<ClientResult>)>,
     handle: JoinHandle<()>,
@@ -61,8 +61,8 @@ impl HostWorker {
         Self { sender, handle }
     }
 
-    /// Processes download requests sequentially, sleeping after every request.
-    /// The task exits cleanly when all senders are dropped.
+    /// Processes download requests sequentially, sleeping after every request. The task exits
+    /// cleanly when all senders are dropped.
     async fn run(
         client: Client,
         delay: Duration,
@@ -93,8 +93,8 @@ pub struct Manager {
     delay: Duration,
     /// Channel buffer size used when spawning new host workers.
     request_buffer_size: usize,
-    /// Per-host download workers, keyed by host (e.g. `"example.com"`).
-    /// Workers are spawned lazily on the first request for each host.
+    /// Per-host download workers, keyed by host (e.g. `"example.com"`). Workers are spawned lazily
+    /// on the first request for each host.
     host_workers: Mutex<HashMap<String, HostWorker>>,
 }
 
@@ -129,8 +129,8 @@ impl Manager {
     pub async fn close(&self) -> Result<(), tokio::task::JoinError> {
         let workers = std::mem::take(&mut *self.host_workers.lock().await);
 
-        // Drop all senders first so every worker receives the shutdown signal
-        // simultaneously, then collect handles and join them sequentially.
+        // Drop all senders first so every worker receives the shutdown signal simultaneously, then
+        // collect handles and join them sequentially.
         let handles: Vec<_> = workers
             .into_values()
             .map(|worker| {
@@ -174,8 +174,8 @@ impl Manager {
     }
 
     /// Extracts the host component of a URL (e.g. `"example.com"` from
-    /// `"https://example.com/img.png"`). Falls back to an empty string for
-    /// malformed URLs so they all share a single fallback queue.
+    /// `"https://example.com/img.png"`). Falls back to an empty string for malformed URLs so they
+    /// all share a single fallback queue.
     fn extract_host(url: &str) -> String {
         url::Url::parse(url)
             .ok()
