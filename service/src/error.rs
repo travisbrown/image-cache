@@ -6,7 +6,7 @@ use tokio::sync::{mpsc::error::SendError, oneshot};
 #[derive(thiserror::Error, Debug)]
 pub enum ChannelError {
     #[error("Send error")]
-    Send(#[from] SendError<Option<(String, oneshot::Sender<super::manager::ClientResult>)>>),
+    Send(#[from] SendError<(String, oneshot::Sender<super::manager::ClientResult>)>),
     #[error("Receive error")]
     Receive(#[from] tokio::sync::oneshot::error::RecvError),
 }
@@ -115,12 +115,4 @@ impl IntoResponse for MapUrlsError {
             }
         }
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ShutdownError {
-    #[error("Request task join error")]
-    RequestTaskJoin(#[from] tokio::task::JoinError),
-    #[error("Send error")]
-    Send(#[from] SendError<Option<(String, oneshot::Sender<super::manager::ClientResult>)>>),
 }

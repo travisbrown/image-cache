@@ -1,12 +1,9 @@
 use chrono::{DateTime, Utc};
-use futures::future::TryFutureExt;
 use image_cache::{client::Client, image_type::ImageType, store::Store};
 use image_cache_index::{Entry, db::Database};
-use std::sync::Arc;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::{
     sync::{
         Mutex,
@@ -48,12 +45,57 @@ pub enum UrlStyle {
     Relative,
 }
 
+/// A running per-host download worker: owns its own HTTP client and applies
+/// the configured delay after every request.
+struct HostWorker {
+    sender: Sender<(String, oneshot::Sender<ClientResult>)>,
+    handle: JoinHandle<()>,
+}
+
+impl HostWorker {
+    /// Spawns a new worker task and returns a handle to its queue.
+    fn spawn(client: Client, delay: Duration, buffer_size: usize) -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::channel(buffer_size);
+        let handle = tokio::task::spawn(Self::run(client, delay, receiver));
+
+        Self { sender, handle }
+    }
+
+    /// Processes download requests sequentially, sleeping after every request.
+    /// The task exits cleanly when all senders are dropped.
+    async fn run(
+        client: Client,
+        delay: Duration,
+        mut receiver: Receiver<(String, oneshot::Sender<ClientResult>)>,
+    ) {
+        while let Some((url, reply)) = receiver.recv().await {
+            log::info!("Downloading: {url}");
+            let result = client.download(&url).await;
+
+            if reply.send(result).is_err() {
+                log::warn!("Already downloaded (may need to re-index image store): {url}");
+            }
+
+            log::info!("Waiting: {delay:?}");
+
+            tokio::time::sleep(delay).await;
+        }
+    }
+}
+
 pub struct Manager {
     url_config: UrlConfig,
     pub index: Database,
     store: Store,
-    request_sender: Sender<Option<(String, oneshot::Sender<ClientResult>)>>,
-    request_receiver_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Template client cloned into each new per-host worker.
+    client: Client,
+    /// Inter-request delay applied per host queue.
+    delay: Duration,
+    /// Channel buffer size used when spawning new host workers.
+    request_buffer_size: usize,
+    /// Per-host download workers, keyed by host (e.g. `"example.com"`).
+    /// Workers are spawned lazily on the first request for each host.
+    host_workers: Mutex<HashMap<String, HostWorker>>,
 }
 
 pub enum ImageStatus {
@@ -70,44 +112,75 @@ impl Manager {
         request_buffer_size: usize,
         delay: Duration,
     ) -> Result<Self, image_cache_index::db::Error> {
-        let client = Arc::new(Client::new(store.clone()));
+        let client = Client::new(store.clone());
         let index = Database::open(index)?;
-
-        let (request_sender, request_receiver) = tokio::sync::mpsc::channel(request_buffer_size);
 
         Ok(Self {
             url_config,
             store,
             index,
-            request_sender,
-            request_receiver_handle: Arc::new(Mutex::new(Some(Self::handle_requests(
-                client,
-                delay,
-                request_receiver,
-            )))),
+            client,
+            delay,
+            request_buffer_size,
+            host_workers: Mutex::new(HashMap::new()),
         })
     }
 
-    pub async fn close(&self) -> Result<(), super::error::ShutdownError> {
-        self.request_sender.send(None).await?;
-        let handle = self.request_receiver_handle.lock().await.take();
-        if let Some(handle) = handle {
+    pub async fn close(&self) -> Result<(), tokio::task::JoinError> {
+        let workers = std::mem::take(&mut *self.host_workers.lock().await);
+
+        // Drop all senders first so every worker receives the shutdown signal
+        // simultaneously, then collect handles and join them sequentially.
+        let handles: Vec<_> = workers
+            .into_values()
+            .map(|worker| {
+                drop(worker.sender);
+                worker.handle
+            })
+            .collect();
+
+        for handle in handles {
             handle.await?;
         }
 
         Ok(())
     }
 
-    pub fn request(
+    pub async fn request(
         &self,
         image_url: &str,
-    ) -> impl Future<Output = Result<ClientResult, super::error::ChannelError>> {
-        let (sender, receiver) = oneshot::channel();
+    ) -> Result<ClientResult, super::error::ChannelError> {
+        let host = Self::extract_host(image_url);
 
-        self.request_sender
-            .send(Some((image_url.to_string(), sender)))
-            .map_err(super::error::ChannelError::from)
-            .and_then(|()| receiver.map_err(super::error::ChannelError::from))
+        let sender = {
+            let mut workers = self.host_workers.lock().await;
+
+            workers
+                .entry(host.clone())
+                .or_insert_with(|| {
+                    log::info!("Creating worker for {host}");
+
+                    HostWorker::spawn(self.client.clone(), self.delay, self.request_buffer_size)
+                })
+                .sender
+                .clone()
+        };
+
+        let (tx, rx) = oneshot::channel();
+
+        sender.send((image_url.to_string(), tx)).await?;
+
+        rx.await.map_err(super::error::ChannelError::from)
+    }
+
+    /// Extracts the host component of a URL (e.g. `"example.com"` from
+    /// `"https://example.com/img.png"`). Falls back to an empty string for
+    /// malformed URLs so they all share a single fallback queue.
+    fn extract_host(url: &str) -> String {
+        url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_default()
     }
 
     pub fn lookup_status(
@@ -123,7 +196,7 @@ impl Manager {
 
             entry.map_or_else(
                 || {
-                    // We should always find a value because of the empty check above.
+                    // We should always find an error because of the empty check above.
                     let timestamp = results
                         .iter()
                         .find_map(|result| result.err())
@@ -195,35 +268,5 @@ impl Manager {
         }
 
         format!("{prefix}request/{encoded_url}")
-    }
-
-    fn handle_requests(
-        client: Arc<Client>,
-        delay: Duration,
-        mut receiver: Receiver<Option<(String, oneshot::Sender<ClientResult>)>>,
-    ) -> JoinHandle<()> {
-        tokio::task::spawn(async move {
-            while let Some(request) = receiver.recv().await {
-                if let Some((url, sender)) = request {
-                    log::info!("Downloading image: {url}");
-                    let result = client.download(&url).await;
-
-                    match sender.send(result) {
-                        Ok(()) => {}
-                        Err(_result) => {
-                            log::warn!(
-                                "Image already downloaded (may need to re-index image store): {url})"
-                            );
-                        }
-                    }
-
-                    log::info!("Waiting until next download: {delay:?}");
-                    tokio::time::sleep(delay).await;
-                } else {
-                    receiver.close();
-                    break;
-                }
-            }
-        })
     }
 }

@@ -99,7 +99,7 @@ async fn static_image(
             .ok_or_else(|| error::StaticImageError::InvalidExtension(parts[1].to_string()))?;
 
         let path = manager
-            .path_for_digest(md5::Digest(digest_bytes))
+            .path_for_digest(digest)
             .ok_or(error::StaticImageError::ImageNotFound(digest))?;
 
         let headers = [(http::header::CONTENT_TYPE, image_mime_type.essence_str())];
@@ -234,7 +234,7 @@ enum Command {
         prefix: PrefixPartLengths,
         #[clap(long)]
         index: PathBuf,
-        #[clap(long, default_value = "8192")]
+        #[clap(long, default_value = "65536")]
         buffer: usize,
         /// Time to wait between image requests in milliseconds
         #[clap(long, default_value = "500")]
