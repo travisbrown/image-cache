@@ -11,6 +11,7 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
+imageformat = "0.3"
 imghdr = { workspace = true }
 md5 = { workspace = true }
 mime = { workspace = true }

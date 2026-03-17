@@ -11,6 +11,7 @@ chrono = { workspace = true }
 cli-helpers = { workspace = true }
 csv = { workspace = true }
 image-cache = { path = "../core/" }
+imghdr = { workspace = true }
 image-cache-index = { path = "../index/" }
 md5 = { workspace = true }
 prefix-file-tree = { workspace = true }

@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ImageType(Option<Type>);
 
 impl ImageType {

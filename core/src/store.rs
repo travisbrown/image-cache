@@ -219,11 +219,7 @@ impl Store {
         let bytes = bytes.as_ref();
 
         // Image type detection requires at least 8 bytes for the magic number.
-        let image_type = if bytes.len() < 8 {
-            None
-        } else {
-            imghdr::from_bytes(bytes)
-        };
+        let image_type = infer_image_format(bytes);
 
         let digest = md5::compute(bytes);
         let path = self.path(digest);
@@ -242,9 +238,36 @@ impl Store {
                 path,
                 name: digest.0,
             },
-            image_type: ImageType::new(image_type),
+            image_type,
             added,
         })
+    }
+}
+
+/// Infer image type from bytes.
+///
+/// This is a hack that is necessary because the `imghdr` crate does not correctly handle some
+/// apparently valid JPEG images served by Meta.
+fn infer_image_format<T: AsRef<[u8]>>(bytes: T) -> ImageType {
+    let bytes = bytes.as_ref();
+
+    // Image type detection requires at least 8 bytes for the magic number.
+    if bytes.len() < 8 {
+        ImageType::new(None)
+    } else {
+        imghdr::from_bytes(bytes)
+            .map(|image_type| ImageType::new(Some(image_type)))
+            .or_else(|| {
+                let mut cursor = std::io::Cursor::new(bytes);
+
+                imageformat::detect_image_format(&mut cursor)
+                    .ok()
+                    .map(|image_format| match image_format {
+                        imageformat::ImageFormat::Jpeg => ImageType::new(Some(imghdr::Type::Jpeg)),
+                        _ => ImageType::new(None),
+                    })
+            })
+            .unwrap_or_default()
     }
 }
 
